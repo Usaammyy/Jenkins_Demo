@@ -1,7 +1,5 @@
 pipeline {
     agent any
-        tools{
-    }
     parameters {
         booleanParam(name: 'Skip_sonarQube', defaultValue: true, description: 'To inject sonarQube uncheck the Box')
     }
