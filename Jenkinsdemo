@@ -1,7 +1,6 @@
 pipeline {
     agent any
         tools{
-        jdk 'jdk8'
     }
     parameters {
         booleanParam(name: 'Skip_sonarQube', defaultValue: true, description: 'To inject sonarQube uncheck the Box')
