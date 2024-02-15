@@ -1,0 +1,86 @@
+pipeline {
+    agent any
+        tools{
+        jdk 'jdk8'
+    }
+    parameters {
+        booleanParam(name: 'Skip_sonarQube', defaultValue: true, description: 'To inject sonarQube uncheck the Box')
+    }
+    environment {
+        SERVICE = 'asset-management-service'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scmGit(branches: [[name: '*/acc']], extensions: [], userRemoteConfigs: [[credentialsId: 'git', url: 'https://git-codecommit.us-east-2.amazonaws.com/v1/repos/asset-management-service']])
+            }
+        }
+        
+        stage("Backup"){
+            steps{
+                sh 'ssh -tt -o StrictHostKeyChecking=no root@acc.erohal.io  ./asset-management-backup.sh'
+            }
+            
+        }
+        
+        stage("Build Jar file"){
+            steps{
+                dir('asset-management-service/') {
+                    sh 'chmod 777 gradlew'
+                    sh './gradlew build'
+                    sh './gradlew clean'
+                    sh './gradlew assemble'
+                }
+            }
+        }
+ 
+        stage('Migrate to acc server') {
+            steps {
+                sshagent(['erohal-access-key']) {
+                    sh 'scp -o StrictHostKeyChecking=no /var/lib/jenkins/workspace/erohal-asset-management-service-pipeline/asset-management-service/build/libs/asset-management-service.jar root@acc.erohal.io:/data/servers/ams_be_jars'
+                }
+            }
+        }
+        stage('Search for running service') {
+            steps {
+                script {
+                    def isRunning = sh(script: "ssh -o StrictHostKeyChecking=no root@acc.erohal.io 'pgrep -f asset-management-service.jar'", returnStatus: true)
+                    if (isRunning == 0) {
+                        echo 'asset-management-service.jar is running. Killing it...'
+                        sh 'ssh -o StrictHostKeyChecking=no root@acc.erohal.io "pkill -f asset-management-service.jar"'
+                    } else {
+                        echo 'asset-management-service.jar is not running.'
+                    }
+                }
+            }
+        }
+ 
+        stage('Deploying') {
+            steps {
+                sh "ssh -o StrictHostKeyChecking=no -l root acc.erohal.io 'java -XX:-UseGCOverheadLimit -Xmx512m -Djavax.net.ssl.trustStore=/data/servers/ssl/client-truststore.jks -Djavax.net.ssl.trustStorePassword=wso2carbon -jar /data/servers/ams_be_jars/asset-management-service.jar --spring.profiles.active=erh_acc >/dev/null 2>&1 &'"
+            }
+        }
+        stage("Inject SonarQube") {
+            when {
+                expression {
+                    def currentDay = new Date().format("EEEE")
+                    return currentDay == "Thursday" || (currentDay != "Thursday" && params.Skip_sonarQube == false)
+                }
+            }
+            steps {
+                dir('asset-management-service/') {
+                    sh './gradlew sonarqube'
+                }
+            }
+        }
+    }
+    post {
+        always {
+            cleanWs()
+            dir("${env.WORKSPACE}@tmp") {
+                deleteDir()
+            }
+        }
+    }
+}
